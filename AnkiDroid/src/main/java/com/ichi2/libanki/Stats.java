@@ -42,6 +42,18 @@ public class Stats {
 
     public static enum ChartType {FORECAST, REVIEW_COUNT, REVIEW_TIME,
         INTERVALS, HOURLY_BREAKDOWN, WEEKLY_BREAKDOWN, ANSWER_BUTTONS, CARDS_TYPES, OTHER};
+    public static final int TYPE_FORECAST = 0;
+    public static final int TYPE_REVIEW_COUNT = 1;
+    public static final int TYPE_REVIEW_TIME = 2;
+    public static final int TYPE_INTERVALS = 3;
+    public static final int TYPE_HOURLY_BREAKDOWN = 4;
+    public static final int TYPE_WEEKLY_BREAKDOWN = 5;
+    public static final int TYPE_ANSWER_BUTTONS = 6;
+    public static final int TYPE_CARDS_TYPES = 7;
+
+    //public static final int TYPE_REVIEWS = 4;
+    //public static final int TYPE_REVIEWING_TIME = 5;
+    // public static final int TYPE_DECK_SUMMARY = 5;
 
     private static Stats sCurrentInstance;
 
@@ -181,8 +193,14 @@ public class Stats {
         mDynamicAxis = true;
         mBackwards = false;
         mTitle = R.string.stats_forecast;
-        mValueLabels = new int[] { R.string.statistics_young, R.string.statistics_mature };
-        mColors = new int[] { R.color.stats_young, R.color.stats_mature };
+        mValueLabels = new int[] { R.string.statistics_learn,
+				   R.string.statistics_relearn,
+				   R.string.statistics_young, 
+				   R.string.statistics_mature};
+        mColors = new int[] { R.color.stats_learn,
+			      R.color.stats_relearn,
+			      R.color.stats_young, 
+			      R.color.stats_mature};
         mAxisTitles = new int[] { type, R.string.stats_cards, R.string.stats_cumulative_cards };
         int end = 0;
         int chunk = 0;
@@ -211,7 +229,7 @@ public class Stats {
         Cursor cur = null;
         try {
             String query;
-            query = "SELECT (due - " + mCol.getSched().getToday() + ")/" + chunk
+	     query = "SELECT (due - " + mCol.getSched().getToday() + ")/" + chunk
                     + " AS day, " // day
                     + "count(), " // all cards
                     + "sum(CASE WHEN ivl >= 21 THEN 1 ELSE 0 END) " // mature cards
@@ -223,36 +241,102 @@ public class Stats {
                     .getDatabase()
                     .rawQuery(query, null);
             while (cur.moveToNext()) {
-                dues.add(new int[] { cur.getInt(0), cur.getInt(1), cur.getInt(2) });
+		// KC 10/19/15
+		// XXX Note hardcode new/day here.  We also initialize the 
+		// lapsen to 0
+                dues.add(new int[] { cur.getInt(0), cur.getInt(1), cur.getInt(2), 20, 0});
             }
         } finally {
             if (cur != null && !cur.isClosed()) {
                 cur.close();
             }
         }
+
+	// KC 10/11/15
+	//
+	// Implementing a first order algorithm on top of this existing 0 order computation, for
+	// TYPE_MONTH only!
+	//
+	// 1) Let: 
+	//    d be the day number
+	//    L be the target probability of lapse [0,1]
+	//    younguns be an array of length(dues) that will keep track new young cards
+	//
+	// Simplifying assumptions:    
+	// * Any cards lapsed are placed on a log_2 time constant for simplicity, and are not relapsed.
+	// * New cards are treated as freshly lapsed.
+	//
+	int dsize = dues.size();
+	int younguns[] = new int[dsize];
+	int d, j;
+	double L = 0.1;  // Hardcode for now
+
+	// Initialize younguns
+	for(d = 0; d < dsize; ++d)
+	    younguns[d] = 0;
+
+	for(d = 0; d < dsize; ++d) {
+
+	    // Any card can be lapsed
+	    (dues.get(d))[4] = (int)Math.ceil(L*dues.get(d)[1]);
+	
+	    // Propagate these lapses as future young cards
+	    // Note that d comes in chunks, so what you need is: d + (j << 2)/chunk
+	    for(j = 0; d + (int)Math.ceil((j << 2)/chunk) < dsize; ++j) 
+		younguns[d + (int)Math.ceil((j << 2)/chunk)] += (dues.get(d))[4];
+	
+	    // Q: What should this panel actually be displaying?
+	    //
+	    // A: If we set the new cards that will become young on day they are introduced,
+	    // this will make the total number of predicted *CARD VIEWS* more accurate.
+	    // But usually, people expect these statistics to refer to the content
+	    // present on a card, not how many times that content will appear during
+	    // any particular study session.  So we disable these for now....
+	    //		younguns[d] = (dues.get(d))[3];
+	    //              younguns[d] += (dues.get(d))[4];
+	    // ... and we explicitly remove the lapsed fraction of cards from the young and 
+	    // mature counts
+	    (dues.get(d))[1] -= (dues.get(d))[4];
+	    (dues.get(d))[2] -= (int)Math.ceil(L*(dues.get(d))[2]);
+	}
+	
+	// Adjust the final count of young cards for all lapsed contributions
+	for(d = 0; d < dsize; ++d)
+	    dues.get(d)[1] += younguns[d];
+	
         // small adjustment for a proper chartbuilding with achartengine
         if (dues.size() == 0 || dues.get(0)[0] > 0) {
-            dues.add(0, new int[] { 0, 0, 0 });
+            dues.add(0, new int[] { 0, 0, 0, 0, 0 });
         }
         if (end == -1 && dues.size() < 2) {
             end = 31;
         }
         if (type != TYPE_LIFE && dues.get(dues.size() - 1)[0] < end) {
-            dues.add(new int[] { end, 0, 0 });
+            dues.add(new int[] { end, 0, 0, 0, 0 });
         } else if (type == TYPE_LIFE && dues.size() < 2) {
-            dues.add(new int[] { Math.max(12, dues.get(dues.size() - 1)[0] + 1), 0, 0 });
+            dues.add(new int[] { Math.max(12, dues.get(dues.size() - 1)[0] + 1), 0, 0, 0, 0 });
         }
 
-        mSeriesList = new double[3][dues.size()];
+	// KC 10/19/15
+	// We extend this to show the new cards and lapses (3->5)
+        mSeriesList = new double[5][dues.size()];
         for (int i = 0; i < dues.size(); i++) {
             int[] data = dues.get(i);
 
-            if(data[1] > mMaxCards)
-                mMaxCards =data[1];
+            if(data[1] + data[3] + data[4] > mMaxCards)
+                mMaxCards = data[1] + data[3] + data[4];
 
             mSeriesList[0][i] = data[0];
-            mSeriesList[1][i] = data[1];
-            mSeriesList[2][i] = data[2];
+	
+	    // Data is weird because I extended the old code, so I wouldn't
+	    // break anything unintentionaly
+	    // 0 = day, 1 = young, 2 = mature, 3 = learn, 4 = lapse
+	    // mature is already present data[1], so don't add it there!
+            mSeriesList[1][i] = data[1] + data[3] + data[4];
+            mSeriesList[2][i] = data[1] + data[4];
+	    mSeriesList[3][i] = data[1];
+	    mSeriesList[4][i] = data[2];
+
             if(data[0] > mLastElement)
                 mLastElement = data[0];
             if(data[0] == 0){
