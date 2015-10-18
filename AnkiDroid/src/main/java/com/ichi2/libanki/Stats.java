@@ -268,7 +268,7 @@ public class Stats {
 	//
 	int dsize = dues.size();
 	int younguns[] = new int[dsize];
-	int d, j;
+	int d, j, relapses;
 	double L = 0.1;  // Hardcode for now
 
 	// Initialize younguns
@@ -278,7 +278,8 @@ public class Stats {
 	for(d = 0; d < dsize; ++d) {
 
 	    // Any card can be lapsed
-	    (dues.get(d))[4] = (int)Math.ceil(L*dues.get(d)[1]);
+	    relapses = (int)Math.ceil(L*younguns[d]);
+	    (dues.get(d))[4] = (int)Math.ceil(L * (dues.get(d)[1])) + relapses;
 	
 	    // Propagate these lapses as future young cards
 	    // Note that d comes in chunks, so what you need is: d + (j << 2)/chunk
@@ -296,7 +297,10 @@ public class Stats {
 	    //              younguns[d] += (dues.get(d))[4];
 	    // ... and we explicitly remove the lapsed fraction of cards from the young and 
 	    // mature counts
-	    (dues.get(d))[1] -= (dues.get(d))[4];
+	    // (Note multiply by two, because we add these back implicity after this loop. 
+	    //  we remove the relapses because they don't get figured into dues[1]
+	    //  until after we've processed each day)
+	    (dues.get(d))[1] -= 2 * (dues.get(d)[4] - relapses);
 	    (dues.get(d))[2] -= (int)Math.ceil(L*(dues.get(d))[2]);
 	}
 	
